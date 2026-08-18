@@ -1,0 +1,19 @@
+[workspace]
+authors = ["ckmah <clarence.k.mah@gmail.com>"]
+channels = ["conda-forge"]
+name = "adventure"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.14.6,<3.15"
+pyproj = "*"
+
+[pypi-dependencies]
+marimo = { version = ">=0.23.16, <0.24", extras = ["recommended"] }
+spatialdata = { version = ">=0.8.0, <0.9", extras = ["extra"] }
+hastyplot = ">=0.4.2, <0.5"
+wigglystuff = { path = "../wigglystuff", editable = true }
+seaborn = "*"

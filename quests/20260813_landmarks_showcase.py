@@ -4,19 +4,49 @@ __generated_with = "0.23.16"
 app = marimo.App(width="medium")
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Spatial Transcriptomics Playground
+
+    In this notebook, we explore a spatial transcriptomics dataset in mouse liver [1]. Spatial transcriptomics is a technology that usually combines microscopy and moleculary biology techniques to image slices of tissue. These assays read out rich multi-modal information as images, including RNA and protein.
+
+    > **Figure 1**. Analogous analysis in geographical sciences ~ spatial transcriptomics [2]:
+    ![alt](public/image.png)
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.accordion(
+        items={
+            "[1] Mouse liver study": "Guilliams, M. et al. Spatial proteogenomics reveals distinct and evolutionarily conserved hepatic macrophage niches. Cell 185, 379-396.e38 (2022).",
+            "[2] Figure 1": "Zormpas, E., Queen, R., Comber, A. & Cockell, S. J. Mapping the transcriptome: Realizing the full potential of spatial data analysis. Cell 186, 5677–5689 (2023).",
+        }
+    )
+    return
+
+
 @app.cell
 def _():
     import marimo as mo
     import spatialdata as sd
+    import spatialdata_plot
     import matplotlib
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     import geopandas as gpd
     import seaborn as sns
+    import altair as alt
+
+    import sys
+
+    sys.path.insert(0, "/Users/ckmah/wigglystuff")
     from wigglystuff import LandmarksWidget
 
-    return LandmarksWidget, gpd, matplotlib, mo, np, pd, plt, sd, sns
+    return LandmarksWidget, alt, gpd, matplotlib, mo, np, pd, plt, sd, sns
 
 
 @app.cell
@@ -24,6 +54,156 @@ def _(matplotlib, mo):
     theme = mo.app_meta().theme
     matplotlib.style.use("dark_background" if theme == "dark" else "default")
     return (theme,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Data layers
+
+    Let's take at the data layers in our example mouse liver dataset (stored in OME-ZARR format):
+    """)
+    return
+
+
+@app.cell
+def _(sd):
+    sdata = sd.read_zarr("data/mouse_liver.zarr")
+    sdata
+    return (sdata,)
+
+
+@app.cell
+def _(sdata):
+    image = sdata["raw_image"].get("scale0").image.to_numpy()[0]
+    masks = sdata["segmentation_mask"].to_numpy()
+    table = sdata.tables["table"]
+    transcripts = sdata["transcripts"]
+    return image, masks, table, transcripts
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Cell nuclei | Segmentation masks
+    """)
+    return
+
+
+@app.cell
+def _(image, masks, mo):
+    mo.image_compare(
+        image[::-1, :],
+        masks[::-1, :],
+        width=600,
+        height=600,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### RNA transcripts
+
+    Every cell contain 1000s of RNA species and each species is expressed at different levels. This experiment images 100 different RNA species.
+    """)
+    return
+
+
+@app.cell
+def _(alt, mo, table, transcripts):
+    _tx_table = transcripts.sample(frac=0.01).compute().reset_index(drop=True)
+    _gene_totals = (
+        table.to_df()
+        .sum()
+        .sort_values(ascending=False)
+        .head(20)
+        .rename("count")
+        .rename_axis("gene")
+        .reset_index()
+    )
+    _chart = (
+        alt.Chart(_gene_totals)
+        .mark_bar()
+        .encode(
+            x=alt.X("count:Q", title="total counts"),
+            y=alt.Y("gene:N", sort="-x", title="gene"),
+            tooltip=["gene:N", "count:Q"],
+        )
+        .properties(title="Top 20 genes", height=420, width=320)
+    )
+    mo.hstack(
+        [
+            mo.ui.table(_tx_table, page_size=12),
+            _chart,
+        ],
+        widths="equal",
+        align="start",
+        gap=1,
+    )
+    return
+
+
+@app.cell
+def _(mo, transcripts):
+    transcript_genes = sorted(
+        transcripts["gene"].dropna().unique().compute().astype(str).tolist()
+    )
+    _default_genes = [g for g in ("Glul", "Hal") if g in transcript_genes]
+    gene_select = mo.ui.multiselect(
+        options=transcript_genes,
+        value=_default_genes,
+        label="genes",
+    )
+    mo.vstack(
+        [
+            mo.md(f"Transcripts — pick one or more genes."),
+            gene_select,
+        ],
+        gap=0.4,
+    )
+    return (gene_select,)
+
+
+@app.cell
+def _(gene_select, plt, sdata):
+    _genes = list(gene_select.value)
+    _fig, _ax = plt.subplots(figsize=(8, 7))
+    if _genes:
+        _tx = sdata["transcripts"]
+        _pts = _tx[_tx["gene"].isin(_genes)][["x", "y", "gene"]].compute()
+        _pts["gene"] = _pts["gene"].astype(str)
+        _cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        _counts = _pts["gene"].value_counts()
+        _order = [g for g in _genes if g in _counts.index]
+        _order = sorted(_order, key=lambda g: int(_counts[g]), reverse=True)
+        for _i, _g in enumerate(_order):
+            _chunk = _pts[_pts["gene"] == _g]
+            _ax.scatter(
+                _chunk["x"],
+                _chunk["y"],
+                s=3,
+                alpha=0.4,
+                label=f"{_g} {len(_chunk):,} count",
+                color=_cycle[_i % len(_cycle)],
+                linewidths=0,
+                rasterized=True,
+                zorder=1 + _i,
+            )
+        _ax.legend(
+            bbox_to_anchor=(1, 0.8),
+            frameon=False,
+            markerscale=4,
+        )
+        _ax.set_title(f"transcripts · {', '.join(_genes)}")
+    else:
+        _ax.set_title("Select one or more genes")
+    _ax.set_aspect("equal")
+    _ax.set_xlabel("x")
+    _ax.set_ylabel("y")
+    _fig
+    return
 
 
 @app.cell(hide_code=True)
@@ -41,13 +221,6 @@ def _(mo):
 
 
 @app.cell
-def _(sd):
-    sdata = sd.read_zarr("data/mouse_liver.zarr")
-    table = sdata.tables["table"]
-    return (table,)
-
-
-@app.cell
 def _(pd, table):
     xy_df = pd.DataFrame(
         table.obsm["spatial"],
@@ -60,8 +233,8 @@ def _(pd, table):
 
 @app.cell
 def _(gpd, np, pd):
+    # Plotting and spatial computation functions
     from shapely.geometry import LineString, Point, Polygon
-
 
     def cardinal_sample(vertices, tension=0.0, n_per_seg=20, closed=False):
         pts = [(float(x), float(y)) for x, y in vertices]
@@ -118,7 +291,6 @@ def _(gpd, np, pd):
         out.append(at(n_seg if closed else n - 1))
         return out
 
-
     def landmark_geoms(landmarks):
         geoms = {}
         for lm in landmarks:
@@ -135,7 +307,9 @@ def _(gpd, np, pd):
             elif kind == "line" and len(data_pts) >= 2:
                 geoms[lid] = ("line", LineString(data_pts))
             elif kind == "spline":
-                sampled = cardinal_sample(data_pts, float(lm.get("tension") or 0.0))
+                sampled = cardinal_sample(
+                    data_pts, float(lm.get("tension") or 0.0)
+                )
                 if len(sampled) >= 2:
                     geoms[lid] = ("spline", LineString(sampled))
             elif kind == "shape":
@@ -149,7 +323,6 @@ def _(gpd, np, pd):
                     geoms[lid] = ("shape", Polygon(ring))
         return geoms
 
-
     def _row_density(df):
         """Max-normalize counts within each landmark × cell type (peak = 1)."""
         if df.empty:
@@ -157,10 +330,11 @@ def _(gpd, np, pd):
             out["density"] = pd.Series(dtype=float)
             return out
         out = df.copy()
-        maxima = out.groupby(["landmark_id", "group"], sort=False)["count"].transform("max")
+        maxima = out.groupby(["landmark_id", "group"], sort=False)[
+            "count"
+        ].transform("max")
         out["density"] = np.where(maxima > 0, out["count"] / maxima, np.nan)
         return out
-
 
     def distances(x, y, groups, landmarks, indices):
         x = np.asarray(x, dtype=float)
@@ -182,7 +356,6 @@ def _(gpd, np, pd):
                     }
                 )
         return pd.DataFrame(rows)
-
 
     def composition(x, y, groups, landmarks, indices):
         x = np.asarray(x, dtype=float)
@@ -214,7 +387,6 @@ def _(gpd, np, pd):
                 )
         return pd.DataFrame(rows)
 
-
     def profile(x, y, groups, landmarks, indices, n=40, radius=None):
         """Cell-type density along a line/spline (for Gradient-along heatmaps)."""
         x = np.asarray(x, dtype=float)
@@ -225,22 +397,33 @@ def _(gpd, np, pd):
         cand = np.zeros(len(x), dtype=bool)
         cand[indices] = True
         if radius is None:
-            radius = 0.05 * max(float(np.ptp(x) or 1.0), float(np.ptp(y) or 1.0))
+            radius = 0.05 * max(
+                float(np.ptp(x) or 1.0), float(np.ptp(y) or 1.0)
+            )
         all_groups = [g for g in pd.unique(groups) if g is not None]
         rows = []
         for lid, (ltype, geom) in landmark_geoms(landmarks).items():
-            if ltype not in ("line", "spline") or geom.geom_type != "LineString":
+            if (
+                ltype not in ("line", "spline")
+                or geom.geom_type != "LineString"
+            ):
                 continue
             for i in range(n):
                 s = i / max(n - 1, 1)
                 pt = geom.interpolate(s, normalized=True)
-                neighborhood = (points.distance(pt) <= radius).to_numpy() & cand
+                neighborhood = (
+                    points.distance(pt) <= radius
+                ).to_numpy() & cand
                 local_groups = groups[neighborhood]
                 n_pts = int(neighborhood.sum())
                 freq = {}
                 if n_pts:
-                    values, counts = np.unique(local_groups, return_counts=True)
-                    freq = {v: int(c) for v, c in zip(values, counts, strict=True)}
+                    values, counts = np.unique(
+                        local_groups, return_counts=True
+                    )
+                    freq = {
+                        v: int(c) for v, c in zip(values, counts, strict=True)
+                    }
                 for g in all_groups:
                     rows.append(
                         {
@@ -257,19 +440,17 @@ def _(gpd, np, pd):
                     )
         return _row_density(pd.DataFrame(rows))
 
-
     def _nice_ceil(value):
         """Ceil to the next 1/2/5 × 10^k boundary."""
         value = float(value)
         if value <= 0:
             return 1.0
         exp = int(np.floor(np.log10(value)))
-        base = 10.0 ** exp
+        base = 10.0**exp
         for m in (1, 2, 5, 10):
             if m * base >= value:
                 return float(m * base)
         return float(10 * base)
-
 
     def _nice_step(limit, target_ticks=4):
         """Pick a 1/2/5 × 10^k tick step for ~target_ticks marks from 0..limit."""
@@ -278,14 +459,15 @@ def _(gpd, np, pd):
             return 1.0
         raw = limit / max(target_ticks - 1, 1)
         exp = int(np.floor(np.log10(raw))) if raw > 0 else 0
-        base = 10.0 ** exp
+        base = 10.0**exp
         for m in (1, 2, 5, 10):
             if m * base >= raw:
                 return float(m * base)
         return float(10 * base)
 
-
-    def distance_bands(x, y, groups, landmarks, indices, edges=None, n_bins=16):
+    def distance_bands(
+        x, y, groups, landmarks, indices, edges=None, n_bins=16
+    ):
         """Cell-type density in distance bins away from a landmark (Gradient-perp)."""
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
@@ -311,7 +493,9 @@ def _(gpd, np, pd):
                 if n:
                     subset = groups[band]
                     values, counts = np.unique(subset, return_counts=True)
-                    freq = {v: int(c) for v, c in zip(values, counts, strict=True)}
+                    freq = {
+                        v: int(c) for v, c in zip(values, counts, strict=True)
+                    }
                 for g in all_groups:
                     rows.append(
                         {
@@ -328,13 +512,12 @@ def _(gpd, np, pd):
                     )
         return _row_density(pd.DataFrame(rows))
 
-
     return composition, distances, landmark_geoms
 
 
 @app.cell
 def _(LandmarksWidget, plt, xy_df):
-    _fig, _ax = plt.subplots(figsize=(10,7))
+    _fig, _ax = plt.subplots(figsize=(10, 7))
     _cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     group_colors = {}
     # Draw abundant types first so rare niche types stay visible on top
@@ -357,7 +540,7 @@ def _(LandmarksWidget, plt, xy_df):
     _ax.set_ylabel("y")
     _ax.set_title("Mouse liver · draw landmarks, then measure")
     _ax.legend(
-        bbox_to_anchor=(1,0.8),
+        bbox_to_anchor=(1, 0.8),
         frameon=False,
         markerscale=3,
     )
@@ -375,34 +558,6 @@ def _(landmarks, mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.callout(
-        mo.md(r"""
-    **Instructions**
-
-    Choose a use case or customize parameters yourself.
-
-    **Draw** a landmark on the tissue map (point / line / spline / shape).
-    Optionally add a selection (lasso / polygon / …) to restrict which cells are measured.
-
-    **Measure** with Distance / Gradient (perpendicular) / Gradient (along) / Composition —
-    or let a premade use case select the relationship for you.
-
-    | Use case | Draw | Measure |
-    | --- | --- | --- |
-    | Lobule zonation | points on portal / central veins | Distance |
-    | Perivascular belt | line along a vessel | Gradient (perpendicular) |
-    | Porto-central axis | spline portal → central | Gradient (along) |
-    | Niche composition | closed shape around a niche | Composition |
-    | ROI-restricted | landmark + selection ROI | any, masked |
-    | Immune proximity | point on a niche | Distance |
-    """),
-        kind="info",
-    )
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
     use_case = mo.ui.radio(
         options=[
             "1. Lobule zonation",
@@ -415,22 +570,40 @@ def _(mo):
         value="1. Lobule zonation",
         label="",
     )
+    use_case_info = mo.accordion(
+        {
+            "Use Case Info": mo.md(r"""
+    | Use case | Draw | Measure |
+    | --- | --- | --- |
+    | Lobule zonation | points on portal / central veins | Distance |
+    | Perivascular belt | line along a vessel | Gradient (perpendicular) |
+    | Porto-central axis | spline portal → central | Gradient (along) |
+    | Niche composition | closed shape around a niche | Composition |
+    | ROI-restricted | landmark + selection ROI | any, masked |
+    | Immune proximity | point on a niche | Distance |
+    """)
+        },
+    )
     mo.vstack(
         [
+            mo.md("### [WIP] Pre-defined Use Cases"),
             mo.md(
-                "**Premade Use Cases**\n\n"
-                "These use-cases simply select the proper relationship to visualize."
+                "Select a use-cases to visualize a known relationship."
             ),
             use_case,
+            use_case_info,
         ],
-        gap=0.4,
     )
     return (use_case,)
 
 
 @app.cell
 def _(landmarks_ui, mo, use_case):
-    _lm_ids = [str(lm.get("id")) for lm in landmarks_ui.landmarks if not lm.get("hidden")]
+    _lm_ids = [
+        str(lm.get("id"))
+        for lm in landmarks_ui.landmarks
+        if not lm.get("hidden")
+    ]
     _sel_ids = ["all"] + [str(s.get("id")) for s in landmarks_ui.selections]
     _default_plot = {
         "1. Lobule zonation": "Distance",
@@ -517,20 +690,22 @@ def _(
         "Hepatocytes",
     ]
 
-
     def _nice_limit_and_step(limit, target_ticks=4):
         limit = float(max(limit, 0.0))
         if limit <= 0:
             return 1.0, 1.0
         exp = int(np.floor(np.log10(limit)))
-        base = 10.0 ** exp
-        nice_hi = next((m * base for m in (1, 2, 5, 10) if m * base >= limit), 10 * base)
+        base = 10.0**exp
+        nice_hi = next(
+            (m * base for m in (1, 2, 5, 10) if m * base >= limit), 10 * base
+        )
         raw = nice_hi / max(target_ticks - 1, 1)
         exp = int(np.floor(np.log10(raw))) if raw > 0 else 0
-        base = 10.0 ** exp
-        step = next((m * base for m in (1, 2, 5, 10) if m * base >= raw), 10 * base)
+        base = 10.0**exp
+        step = next(
+            (m * base for m in (1, 2, 5, 10) if m * base >= raw), 10 * base
+        )
         return nice_hi, step
-
 
     def _hist_heatmap(
         df,
@@ -545,7 +720,9 @@ def _(
         """Max-normalized row heatmap rendered by seaborn.histplot."""
         rows = []
         for group in row_order:
-            values = df.loc[df["group"] == group, value_col].to_numpy(dtype=float)
+            values = df.loc[df["group"] == group, value_col].to_numpy(
+                dtype=float
+            )
             values = values[np.isfinite(values)]
             if values.size:
                 rows.append((group, values))
@@ -600,15 +777,23 @@ def _(
             vmin=0,
             vmax=1,
             cbar=True,
-            cbar_kws={"label": "Density (Norm.)", "ticks": [0, 0.5, 1], "shrink": 0.8},
+            cbar_kws={
+                "label": "Density (Norm.)",
+                "ticks": [0, 0.5, 1],
+                "shrink": 0.8,
+            },
             ax=ax,
         )
 
         ticks = np.arange(x_min, x_max + 0.5 * step, step)
         ax.set_xticks(ticks)
-        ax.tick_params(axis="x", length=5, width=1.0, color=edge, direction="out")
+        ax.tick_params(
+            axis="x", length=5, width=1.0, color=edge, direction="out"
+        )
         for tick in ticks:
-            ax.axvline(tick, color=grid, linestyle=":", linewidth=0.8, zorder=3)
+            ax.axvline(
+                tick, color=grid, linestyle=":", linewidth=0.8, zorder=3
+            )
         ax.set_yticks(np.arange(len(shown_groups)))
         ax.set_yticklabels(shown_groups)
         ax.tick_params(axis="y", length=0)
@@ -624,7 +809,6 @@ def _(
         fig.tight_layout()
         return fig
 
-
     def _along_positions(x, y, groups, landmarks, indices, radius=None):
         """Project selected cells onto line/spline landmarks → normalized path position s."""
         x = np.asarray(x, dtype=float)
@@ -633,10 +817,15 @@ def _(
         indices = np.asarray(indices, dtype=int)
         points = gpd.GeoSeries(gpd.points_from_xy(x, y))
         if radius is None:
-            radius = 0.05 * max(float(np.ptp(x) or 1.0), float(np.ptp(y) or 1.0))
+            radius = 0.05 * max(
+                float(np.ptp(x) or 1.0), float(np.ptp(y) or 1.0)
+            )
         rows = []
         for lid, (ltype, geom) in landmark_geoms(landmarks).items():
-            if ltype not in ("line", "spline") or geom.geom_type != "LineString":
+            if (
+                ltype not in ("line", "spline")
+                or geom.geom_type != "LineString"
+            ):
                 continue
             dist = points.distance(geom).to_numpy()
             for i in indices:
@@ -653,7 +842,6 @@ def _(
                     }
                 )
         return pd.DataFrame(rows)
-
 
     if not _lms:
         chart = mo.md("_Add a landmark on the map to unlock measurements._")
@@ -710,7 +898,9 @@ def _(
                 f"Gradient (perpendicular) · {_lid} · selection={_sid}",
                 "distance from landmark",
                 x_max=_hi,
-            ) or mo.md("_No cells in distance bins for this landmark / selection._")
+            ) or mo.md(
+                "_No cells in distance bins for this landmark / selection._"
+            )
     elif plot_type.value == "Composition":
         _c = composition(_x, _y, _groups, _lms, _idx)
         if _c.empty:
@@ -736,7 +926,9 @@ def _(
     else:
         _p = _along_positions(_x, _y, _groups, _lms, _idx)
         if _p.empty:
-            chart = mo.md("_Need a **line** or **spline** landmark for Gradient (along)._")
+            chart = mo.md(
+                "_Need a **line** or **spline** landmark for Gradient (along)._"
+            )
         else:
             _focus = [g for g in _grad_focus if g in set(_p["group"])]
             chart = _hist_heatmap(
@@ -756,7 +948,6 @@ def _(
         f"use case: **{use_case.value}**_"
     )
     mo.vstack([summary, chart])
-
     return
 
 
