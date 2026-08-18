@@ -15,5 +15,5 @@ pyproj = "*"
 marimo = { version = ">=0.23.16, <0.24", extras = ["recommended"] }
 spatialdata = { version = ">=0.8.0, <0.9", extras = ["extra"] }
 hastyplot = ">=0.4.2, <0.5"
-wigglystuff = { path = "../wigglystuff", editable = true }
+spatial-rx = { path = "../spatial-rx", editable = true }
 seaborn = "*"

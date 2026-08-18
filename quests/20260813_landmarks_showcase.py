@@ -43,8 +43,8 @@ def _():
 
     import sys
 
-    sys.path.insert(0, "/Users/ckmah/wigglystuff")
-    from wigglystuff import LandmarksWidget
+    sys.path.insert(0, "/Users/ckmah/spatial-rx")
+    from spatial_rx import LandmarksWidget
 
     return LandmarksWidget, alt, gpd, matplotlib, mo, np, pd, plt, sd, sns
 
